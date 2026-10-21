@@ -211,6 +211,42 @@ textarea.notes:focus{border-color:var(--accent);background:var(--field)}
   .back{display:inline-flex}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+.printafter{display:flex;align-items:center;gap:6px;font-size:13.5px;color:var(--muted);cursor:pointer;white-space:nowrap}
+#print-sheet{display:none}
+@page{size:letter;margin:.4in}
+@media print{
+  html,body{height:auto!important;min-height:0!important;background:#fff!important;color:#000!important;padding:0!important;margin:0!important}
+  #print-sheet{break-inside:avoid}
+  body > *:not(#print-sheet), body::before, .toast, .pop{display:none!important}
+  #print-sheet{display:block;color:#000;font-family:"Jost","Futura","Avenir Next",sans-serif;font-size:11pt;line-height:1.25}
+  #print-sheet *{color:#000!important}
+  .p-head{display:grid;grid-template-columns:1fr 1.1fr 1fr;gap:.25in;align-items:start}
+  .p-col{display:grid;gap:6px}
+  .p-mid{text-align:center;padding-top:.2in}
+  .p-logo{font-size:30pt;font-weight:700;letter-spacing:.18em}
+  .p-sub{font-size:7pt;font-weight:700;letter-spacing:.08em}
+  .p-title{font-size:20pt;margin-top:10px}
+  .p-order{border:1.2px solid #000;padding:5px 8px;font-size:12pt;margin-bottom:2px}
+  .p-order b{font-family:"IBM Plex Mono",monospace;font-size:14pt}
+  .p-box{display:grid;grid-template-columns:auto 1fr;gap:8px;border:1.2px solid #000;padding:5px 8px;min-height:28px;align-items:center}
+  .p-l{font-size:10pt;white-space:nowrap}
+  .p-v{font-size:11pt;font-weight:500;overflow-wrap:anywhere}
+  .p-rule{border-top:2px solid #000;margin:.14in 0}
+  .p-row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.35in;margin-bottom:.12in;align-items:start}
+  .p-tiny{font-size:7pt;text-align:right}
+  .p-ft{display:grid;grid-template-columns:1fr 1fr;gap:.6in;margin:.06in .1in .12in}
+  .p-side{text-align:center;font-size:11pt;margin-bottom:4px}
+  .p-ch{border:1.2px solid #000;border-bottom:0;padding:4px 8px;font-size:10pt;margin-top:6px}
+  .p-conn{display:grid;grid-template-columns:22px 1fr;border:1.2px solid #000;border-top-width:0;min-height:27px;align-items:center;padding:0 8px}
+  .p-conn:nth-child(even){background:#eee;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .p-n{font-size:10pt}
+  .p-notes{border:1.2px solid #000;padding:5px 8px;min-height:1.7in;margin-bottom:.12in}
+  .p-nv{white-space:pre-wrap;font-size:11pt;margin-top:3px}
+  .p-shop .p-box{border-style:dashed}
+  .p-foot{border-top:2px solid #000;padding-top:5px;text-align:center;font-size:8.5pt;font-weight:600}
+  .p-printed{text-align:right;font-size:7pt;margin-top:4px}
+}
 </style>
 </head>
 <body class="signed-out">

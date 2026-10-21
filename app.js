@@ -56,11 +56,19 @@ let HIST = [], HIST_BY = new Map(), VOCAB = null, CUSTS = [];
 const LIVE = new Map();           // id -> live doc (new orders + amended history)
 let ALL = [], BY_ID = new Map();
 let fs = null, me = null, canWrite = false, dbReady = false;
-const S = { tab:"queue", sel:null, mode:"view", draft:null, q:"", cust:null, shown:150, errors:{} };
+const S = { tab:"home", sel:null, mode:"view", draft:null, q:"", cust:null, shown:150, errors:{} };
 
+// FormDocs orders have no status. Treat one as open (Submitted) when it was entered recently
+// and its date needed is today or later; older ones count as done.
+function autoOpen(r, today, minSub, maxNeed){
+  if(STATUSES.includes(r.status)) return;
+  if(r.need && r.need>=today && r.need<=maxNeed && (r.sub||"")>=minSub){ r._legacyStatus = r._legacyStatus ?? (r.status||""); r.status="Submitted"; r._auto=true; }
+}
 function rebuild(){
   BY_ID = new Map(HIST_BY);
   for(const [id,d] of LIVE) BY_ID.set(id, d);
+  const today=todayISO(), minSub=addDays(today,-120), maxNeed=addDays(today,120);
+  for(const r of BY_ID.values()) autoOpen(r, today, minSub, maxNeed);
   ALL = [...BY_ID.values()].sort((a,b)=> (b.sub||"").localeCompare(a.sub||"") || b.id.localeCompare(a.id));
   $("#ct-orders").textContent = ALL.length.toLocaleString();
   $("#ct-queue").textContent = queueItems().length || "";
@@ -143,7 +151,8 @@ function route(){
   const h = (location.hash||"").slice(1);
   if(h.startsWith("o-")){ S.sel = h.slice(2); S.mode="view"; if(S.tab==="new") S.tab="orders"; }
   else if(h==="new"){ startNew(); return; }
-  else if(h==="orders"||h==="queue"||h==="parts"){ S.tab=h; if(h==="parts") S.sel=null; }
+  else if(h==="orders"||h==="queue"||h==="parts"||h==="home"){ S.tab=h; if(h==="parts"||h==="home"){ S.sel=null; S.mode="view"; S.draft=null; } }
+  else if(!h){ S.tab="home"; S.sel=null; }
   renderAll();
 }
 window.addEventListener("hashchange", route);
@@ -165,7 +174,7 @@ function buildLine(r){
   return `<b>${esc(os)}</b> → <b>${esc(is)}</b>${r.len?` · ${esc(r.len)}`:""}${r.qty?` · ×${esc(r.qty)}`:""}`;
 }
 function rowHTML(r){
-  const meta = (S.tab==="queue"||S.tab==="parts") ? `${esc(r.time||"")}` : esc(fmtDate(r.sub));
+  const meta = (S.tab==="queue"||S.tab==="parts"||S.tab==="home") ? `${esc(r.time||"")}` : esc(fmtDate(r.sub));
   return `<button class="row" data-id="${esc(r.id)}" ${S.sel===r.id?'aria-current="true"':""}>
     <span class="cust">${esc(r.name||"(no name)")}</span>
     <span class="meta"><span class="mono">#${esc(r.id)}</span> · ${meta}${r.status&&OPEN.has(r.status)?` <span class="pill ${stClass(r.status)}">${esc(r.status)}</span>`:""}</span>
@@ -177,7 +186,7 @@ function renderRail(){
   const chips = $("#chips");
   chips.innerHTML = S.cust ? `<span class="chip">Customer: ${esc(CUSTS.find(c=>c.k===S.cust)?.name || S.cust)} <button id="clr-cust" aria-label="Clear customer filter">×</button></span>` : "";
   const list = $("#list");
-  if((S.tab==="queue"||S.tab==="parts") && !S.q && !S.cust){
+  if((S.tab==="queue"||S.tab==="parts"||S.tab==="home") && !S.q && !S.cust){
     const items = queueItems(), today=todayISO(), tmr=addDays(today,1);
     $("#hint").textContent = items.length ? "Open orders, soonest due first." : "";
     if(!items.length){
@@ -265,7 +274,7 @@ function blankDraft(){
   return {id:null, sub:todayISO(), need:"", time:"3:00 PM", name:"", mas:"", phone:"", email:"", pay:"", qty:"1", len:"18\"", color:"Black", outDev:"", inDev:"", out:[""], inp:[""], notes:"", rep:lsGet("cc-rep")||"", status:"Submitted", quote:""};
 }
 function startNew(from){
-  S.tab = S.tab==="queue"?"queue":"orders";
+  S.tab = (S.tab==="queue"||S.tab==="home")?S.tab:"orders";
   S.mode="new"; S.sel=null; S.errors={};
   const d = blankDraft();
   if(from){
@@ -551,14 +560,33 @@ function renderMain(){
   const r = S.sel && BY_ID.get(S.sel);
   if(r){ renderView(r); return; }
   if(S.tab==="parts" && !S.sel){ renderParts(); return; }
-  const open=queueItems().length, today=todayISO();
-  const due=queueItems().filter(x=>x.need===today).length;
+  if(S.sel){ main.innerHTML = `<div class="placeholder"><h2>Order #${esc(S.sel)} isn't in the system</h2><p>Check the number, or search for the customer.</p></div>`; return; }
+  renderHome();
+}
+function renderHome(){
+  const q=queueItems(), today=todayISO(), tmr=addDays(today,1);
+  const overdue=q.filter(r=>r.need&&r.need<today), dueToday=q.filter(r=>r.need===today), dueTmr=q.filter(r=>r.need===tmr);
+  const ready=q.filter(r=>r.status==="Ready"), toBuild=q.filter(r=>r.status==="Submitted"||r.status==="In build");
   const yr=String(new Date().getFullYear()); const thisYear=ALL.filter(x=>(x.sub||"").startsWith(yr)).length;
-  main.innerHTML = `<div class="placeholder">
-    <h2>${S.sel?`Order #${esc(S.sel)} isn't in the system`:"Pick an order, or start a new one"}</h2>
-    <p>Search any past cable by customer, connector or device, then duplicate it for a repeat order. New orders go straight to the service queue.</p>
-    <div class="stats"><div><b class="mono">${open}</b><span>open</span></div><div><b class="mono">${due}</b><span>due today</span></div><div><b class="mono">${thisYear.toLocaleString()}</b><span>orders in ${yr}</span></div><div><b class="mono">${ALL.length.toLocaleString()}</b><span>on file</span></div></div>
-    <button class="btn primary" id="btn-new2">+ New cable order</button>
+  const parts=partsData().list.reduce((a,p)=>a+p.total,0);
+  const tile=(n,l,go,cls="")=>`<button class="tile ${cls}" data-go="${go}"><b class="mono">${n}</b><span>${l}</span></button>`;
+  const mini=rows=>rows.length?rows.map(r=>`<button class="row" data-id="${esc(r.id)}"><span class="cust">${esc(r.name||"(no name)")}</span><span class="meta"><span class="mono">#${esc(r.id)}</span> · ${esc(r.time||"")} <span class="pill ${stClass(r.status)}">${esc(r.status)}</span></span><span class="build">${buildLine(r)}</span></button>`).join(""):`<div class="hint" style="padding:10px 0">Nothing.</div>`;
+  $("#main").innerHTML = `
+  <div class="home">
+    <div class="home-head"><div><h2>${new Date().toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"})}</h2><p class="hint">Hi ${esc((me&&me.name||"").split(" ")[0]||"there")}. Here's where the cable bench stands.</p></div>
+      <button class="btn primary" id="btn-new2">+ New cable order</button></div>
+    <div class="tiles">
+      ${tile(overdue.length,"overdue","queue",overdue.length?"bad":"")}
+      ${tile(dueToday.length,"due today","queue",dueToday.length?"warn":"")}
+      ${tile(toBuild.length,"to build","queue")}
+      ${tile(ready.length,"ready for pickup","queue",ready.length?"ok":"")}
+      ${tile(parts,"connectors needed","parts")}
+    </div>
+    <div class="grid2 home-lists">
+      <section class="sheet"><div class="sec"><div class="sec-title">${overdue.length?"Overdue & due today":"Due today"}</div><div class="mini">${mini([...overdue,...dueToday])}</div></div></section>
+      <section class="sheet"><div class="sec"><div class="sec-title">Due tomorrow</div><div class="mini">${mini(dueTmr)}</div></div></section>
+    </div>
+    <p class="hint" style="text-align:center">${ALL.length.toLocaleString()} orders on file · ${thisYear.toLocaleString()} in ${yr}. Search any past cable from the box on the left.</p>
   </div>`;
 }
 function renderAll(keepMain){
@@ -668,7 +696,9 @@ function printOrder(r){
 // ---------- events ----------
 document.addEventListener("click", e=>{
   const t=e.target;
-  const tab=t.closest(".tab"); if(tab){ S.tab=tab.dataset.tab; if(S.tab==="parts") S.sel=null; S.shown=150; if(S.mode!=="view"){ S.mode="view"; S.draft=null; } go(S.tab); return; }
+  if(t.closest("#brand")){ S.q=""; S.cust=null; const qi=$("#q"); if(qi) qi.value=""; S.tab="home"; S.sel=null; S.mode="view"; S.draft=null; go("home"); return; }
+  const dl=t.closest("[data-go]"); if(dl){ S.tab=dl.dataset.go; S.sel=null; go(S.tab); return; }
+  const tab=t.closest(".tab"); if(tab){ S.tab=tab.dataset.tab; if(S.tab==="parts"||S.tab==="home") S.sel=null; S.shown=150; if(S.mode!=="view"){ S.mode="view"; S.draft=null; } go(S.tab); return; }
   if(t.closest("#btn-new")||t.closest("#btn-new2")){ startNew(); return; }
   const row=t.closest(".row"); if(row){ S.mode="view"; S.draft=null; go("o-"+row.dataset.id); window.scrollTo(0,0); return; }
   if(t.closest("#more")){ S.shown+=200; renderRail(); return; }
@@ -694,7 +724,7 @@ document.addEventListener("click", e=>{
 });
 document.addEventListener("input", e=>{
   const t=e.target;
-  if(t.id==="q"){ S.q=t.value; S.shown=150; if(S.tab==="queue" && S.q){ S.tab="orders"; } clearTimeout(S.qt); S.qt=setTimeout(renderRail, 120); return; }
+  if(t.id==="q"){ S.q=t.value; S.shown=150; if((S.tab==="queue"||S.tab==="home"||S.tab==="parts") && S.q){ S.tab="orders"; } clearTimeout(S.qt); S.qt=setTimeout(renderRail, 120); return; }
   if(t.closest("#edit-sheet")){ setDraftFrom(t); const live = t.isConnected ? t : document.activeElement; if(live && live.dataset && live.dataset.combo) openPop(live); if(S.errors[t.dataset.k]){ delete S.errors[t.dataset.k]; t.closest(".f")?.classList.remove("err"); } }
 });
 document.addEventListener("focusin", e=>{ const t=e.target; if(t.dataset && t.dataset.combo && t.closest("#edit-sheet")) openPop(t); });

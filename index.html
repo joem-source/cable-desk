@@ -215,6 +215,22 @@ textarea.notes:focus{border-color:var(--accent);background:var(--field)}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
+.brand{border:0;background:none;padding:0;cursor:pointer;color:var(--ink)}
+.home{max-width:980px;margin:0 auto;display:grid;gap:18px}
+.home-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.home-head h2{margin:0;font-family:var(--f-display);font-weight:600;font-size:26px}
+.home-head p{margin:2px 0 0}
+.tiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+.tile{display:grid;gap:2px;text-align:left;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);cursor:pointer}
+.tile:hover{border-color:var(--ink)}
+.tile b{font-size:30px;font-weight:500;line-height:1.1}
+.tile span{font-size:13px;color:var(--muted)}
+.tile.bad b{color:var(--bad)} .tile.warn b{color:var(--warn)} .tile.ok b{color:var(--ok)}
+.home-lists{gap:14px}
+.home-lists .sheet{margin:0;width:100%}
+.mini .row{padding:9px 0;border-left:0;border-right:0}
+.mini .row:last-child{border-bottom:0}
+@media (max-width:860px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .ptable{display:grid}
 .prow{display:grid;grid-template-columns:56px minmax(0,1.2fr) minmax(0,2fr) 110px;gap:12px;align-items:baseline;padding:8px 0;border-bottom:1px solid var(--line)}
 .prow:last-child{border-bottom:0}
@@ -276,8 +292,9 @@ textarea.notes:focus{border-color:var(--accent);background:var(--field)}
 
 
 <header class="top">
-  <div class="brand"><b>GOTHAM</b><span>Custom Cable Desk</span></div>
+  <button class="brand" id="brand" title="Back to the dashboard"><b>GOTHAM</b><span>Custom Cable Desk</span></button>
   <nav class="tabs" role="tablist">
+    <button class="tab" id="tab-home" role="tab" data-tab="home">Dashboard</button>
     <button class="tab" id="tab-queue" role="tab" data-tab="queue">Open queue <span class="ct" id="ct-queue"></span></button>
     <button class="tab" id="tab-parts" role="tab" data-tab="parts">Parts needed</button>
     <button class="tab" id="tab-orders" role="tab" data-tab="orders">All orders <span class="ct" id="ct-orders"></span></button>

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Cable Desk Import</title>
+<style>
+:root{--bg:#f3f3ef;--panel:#fff;--ink:#16171a;--muted:#62656d;--line:#d9d9d2;--accent:#1f4fd1;--bad:#b3261e;--ok:#1d7a46}
+@media (prefers-color-scheme: dark){:root{--bg:#121315;--panel:#1b1c1f;--ink:#ececea;--muted:#9a9ca3;--line:#2e3034;--accent:#7d9cff;--bad:#ff8a80;--ok:#6fd39a;color-scheme:dark}}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 "Avenir Next",system-ui,sans-serif;margin:0;padding:40px 16px}
+main{max-width:560px;margin:0 auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:28px;display:grid;gap:14px}
+h1{margin:0;font-size:22px}
+p{margin:0;color:var(--muted)}
+button{font:inherit;padding:9px 16px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;justify-self:start}
+button:disabled{opacity:.5}
+#log{font-family:ui-monospace,Menlo,monospace;font-size:13px;white-space:pre-wrap}
+.bad{color:var(--bad)}.ok{color:var(--ok)}
+</style>
+</head>
+<body>
+<main>
+  <h1>Import FormDocs history</h1>
+  <p>One-time step. Sign in, then choose the <b>history.json</b> file Claude gave you. It uploads the past orders to your Firebase database. Running it again replaces the history with the new file; orders entered in the Cable Desk are not touched.</p>
+  <button id="signin">Sign in with Google</button>
+  <input type="file" id="file" accept=".json" disabled>
+  <div id="log"></div>
+  <p><a href="./">Back to the Cable Desk</a></p>
+</main>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="config.js"></script>
+<script>
+firebase.initializeApp(window.FIREBASE_CONFIG);
+const fs = firebase.firestore(), log = document.getElementById("log"), fileIn = document.getElementById("file");
+const say = (t, c) => { const d = document.createElement("div"); d.textContent = t; if (c) d.className = c; log.appendChild(d); };
+document.getElementById("signin").onclick = () => { const p = new firebase.auth.GoogleAuthProvider(); p.setCustomParameters({ hd: window.ALLOWED_DOMAIN }); firebase.auth().signInWithPopup(p).catch(e => say(e.message, "bad")); };
+firebase.auth().onAuthStateChanged(u => { if (u) { say("Signed in as " + u.email); fileIn.disabled = false; } });
+fileIn.onchange = async () => {
+  const f = fileIn.files[0]; if (!f) return;
+  fileIn.disabled = true;
+  try {
+    const data = JSON.parse(await f.text());
+    if (!data.f || !data.r) throw new Error("That isn't the history.json file from Claude.");
+    const SIZE = 1000, n = Math.ceil(data.r.length / SIZE);
+    say(`${data.r.length.toLocaleString()} orders, uploading in ${n} parts…`);
+    const old = await fs.collection("history_chunks").get();
+    for (const d of old.docs) if (+d.id.slice(1) >= n) await d.ref.delete();
+    for (let i = 0; i < n; i++) {
+      const rows = data.r.slice(i * SIZE, (i + 1) * SIZE);
+      await fs.collection("history_chunks").doc("c" + String(i).padStart(3, "0")).set({ i, rows: JSON.stringify(rows) });
+      say(`Part ${i + 1} of ${n} done`);
+    }
+    await fs.collection("meta").doc("history").set({ version: Date.now(), count: data.r.length, chunks: n, fields: data.f, exported: data.exported || "" });
+    say("Done. Open the Cable Desk and the history will be there.", "ok");
+  } catch (e) { say("Import stopped: " + (e.message || e), "bad"); fileIn.disabled = false; }
+};
+</script>
+</body>
+</html>

@@ -1,4 +1,3 @@
-
 (() => {
 "use strict";
 // ---------- constants ----------
@@ -210,6 +209,7 @@ async function renderView(r){
       <div class="actions">
         <button class="btn" id="act-dup">Duplicate</button>
         <button class="btn" id="act-edit" ${can?"":"disabled"}>Amend</button>
+        <button class="btn" id="act-print">Print</button>
         <button class="btn ghost" id="act-copy" title="Copy a text summary for email or the SO">Copy summary</button>
       </div>
     </div>
@@ -304,6 +304,7 @@ function renderEdit(){
       ${d._from?`<span class="hint">Copied from #${esc(d._from)}</span>`:""}
       <div class="actions">
         <button class="btn ghost" id="act-cancel">Cancel</button>
+        <label class="printafter"><input type="checkbox" id="d-printafter" ${lsGet("cc-print")!=="0"?"checked":""}> Print when ${isNew?"submitted":"saved"}</label>
         <button class="btn primary" id="act-save">${isNew?"Submit to service":"Save amendment"}</button>
       </div>
     </div>
@@ -487,6 +488,7 @@ async function save(){
   doSave("");
 }
 async function doSave(note){
+  const pa=$("#d-printafter"); S.printAfter = pa ? pa.checked : false; lsSet("cc-print", S.printAfter?"1":"0");
   saving=true; const btn=$("#act-save"); if(btn){ btn.disabled=true; btn.textContent="Saving…"; }
   const d=S.draft, now=new Date().toISOString();
   try{
@@ -498,6 +500,7 @@ async function doSave(note){
       LIVE.set(id, liveRec(id, body));
       rebuild(); S.mode="view"; S.sel=id; S.draft=null; history.replaceState(null,"","#o-"+id);
       toast(`Order #${id} submitted to service`); renderAll();
+      if(S.printAfter) setTimeout(()=>printOrder(BY_ID.get(id)), 300);
     } else {
       const cur = BY_ID.get(d.id); const next = cleanDraft(d);
       const changed = FIELDS.filter(k => k!=="id" && JSON.stringify(cur[k]??(k==="out"||k==="inp"?[]:"")) !== JSON.stringify(next[k]??(k==="out"||k==="inp"?[]:"")));
@@ -508,6 +511,7 @@ async function doSave(note){
       await fs.collection("orders").doc(d.id).set(body);
       LIVE.set(d.id, liveRec(d.id, body));
       rebuild(); S.mode="view"; S.draft=null; toast(`Order #${d.id} amended`); renderAll();
+      if(S.printAfter) setTimeout(()=>printOrder(BY_ID.get(d.id)), 300);
     }
   }catch(e){
     const code = e && e.code;
@@ -561,6 +565,34 @@ function renderAll(keepMain){
   renderMain();
 }
 
+// ---------- print ----------
+// One letter page laid out like the FormDocs Custom Cable sheet.
+function printOrder(r){
+  if(!r) return;
+  let el = document.getElementById("print-sheet");
+  if(!el){ el=document.createElement("div"); el.id="print-sheet"; document.body.appendChild(el); }
+  const box = (l,v,cls="") => `<div class="p-box ${cls}"><span class="p-l">${l}</span><span class="p-v">${esc(v||"")}</span></div>`;
+  const conns = arr => { let h=""; for(let i=0;i<8;i++) h+=`<div class="p-conn"><span class="p-n">${i+1}</span><span class="p-v">${esc((arr||[])[i]||"")}</span></div>`; return h; };
+  el.innerHTML = `
+  <div class="p-head">
+    <div class="p-col">${box("MAS ID",r.mas)}${box("Name",r.name)}${box("Phone",r.phone)}${box("Email",r.email)}${box("Payment",r.pay)}</div>
+    <div class="p-mid"><div class="p-logo">GOTHAM</div><div class="p-sub">SOUND &amp; COMMUNICATIONS, INC.</div><div class="p-title">Custom Cable</div></div>
+    <div class="p-col"><div class="p-order">Order <b>${esc(r.id)}</b></div>${box("Date Submitted",fmtDate(r.sub))}${box("Date Needed",fmtDate(r.need))}${box("Time Needed",r.time)}${box("Status",r.status)}${box("Sales Rep",r.rep)}</div>
+  </div>
+  <div class="p-rule"></div>
+  <div class="p-row3">${box("Quantity",r.qty)}<div>${box("Length",r.len)}<div class="p-tiny">(cable only)</div></div>${box("Cable Color",r.color)}</div>
+  <div class="p-ft">
+    <div><div class="p-side">Output / From</div>${box("Output Device",r.outDev)}<div class="p-ch">Output Connectors</div>${conns(r.out)}</div>
+    <div><div class="p-side">Input / To</div>${box("Input Device",r.inDev)}<div class="p-ch">Input Connectors</div>${conns(r.inp)}</div>
+  </div>
+  <div class="p-notes"><span class="p-l">Notes</span><div class="p-nv">${esc(r.notes||"")}</div></div>
+  <div class="p-row3">${box("Quote",r.quote)}${box("Approved",r.appr)}${box("Date",fmtDate(r.apprDate))}</div>
+  <div class="p-row3 p-shop">${box("Built by","")}${box("Date built","")}${box("Checked by","")}</div>
+  <div class="p-foot">330 West 38th Street, Ground Floor #105, New York, NY 10018 &nbsp;·&nbsp; Hours: Monday–Friday, 9AM–6PM<br>P: (212) 629-9430 &nbsp; F: (212) 629-9436 &nbsp; service@gothamsound.com &nbsp; www.gothamsound.com</div>
+  <div class="p-printed">Printed ${esc(new Date().toLocaleString())}${me?` by ${esc(me.name)}`:""}</div>`;
+  window.print();
+}
+
 // ---------- events ----------
 document.addEventListener("click", e=>{
   const t=e.target;
@@ -571,6 +603,7 @@ document.addEventListener("click", e=>{
   if(t.closest("#clr-cust")){ S.cust=null; renderRail(); return; }
   const r = S.sel && BY_ID.get(S.sel);
   if(t.closest("#act-dup") && r){ startNew(r); return; }
+  if(t.closest("#act-print") && r){ printOrder(r); return; }
   if(t.closest("#act-edit") && r){ startEdit(r); return; }
   if(t.closest("#act-copy") && r){ const txt=summary(r); (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>toast("Summary copied"),()=>toast("Copy isn't available here")); return; }
   if(t.closest("#cust-link") && r){ S.cust=custKey(r.name); S.q=""; $("#q").value=""; S.tab="orders"; S.shown=150; renderRail(); document.querySelectorAll(".tab").forEach(x=>x.setAttribute("aria-selected",String(x.dataset.tab==="orders"))); return; }

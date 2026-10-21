@@ -597,26 +597,61 @@ function renderAll(keepMain){
 
 // ---------- parts needed ----------
 const FAM_LABEL = {xlr:"XLR",ta:"TA (mini XLR)",hirose:"Hirose",lemo:"Lemo",bnc:"BNC",sma:"SMA",din:"DIN 1.0/2.3",ptap:"P-Tap",dtap:"D-Tap",usbc:"USB-C",usb:"USB",dc21:"2.1mm DC",dc25:"2.5mm DC / BDS",mini:"1/8\" (3.5mm)",qtr:"1/4\"",rj45:"RJ45",db25:"DB25"};
-const PARTS = { statuses: new Set(["Submitted","In build","On hold"]), due: "all" };
+const PARTS = { statuses: new Set(["Submitted"]) };
 function parseQty(q){ const s=String(q||"").trim(); const m=s.match(/\d+/); if(!m) return {n:1, unsure:true}; const extra=(s.match(/\d+/g)||[]).length>1 || /see|multiple|stock/i.test(s); return {n:+m[0], unsure:extra}; }
 // Channel labels like "Left / Blue" are markings, not different parts.
 const partName = c => String(c||"").replace(/\(?\s*\b(left|right|l|r)\s*\/\s*(blue|red)\s*\)?/ig,"").replace(/\(?\s*\b(blue|red)\s*\/\s*(left|right)\s*\)?/ig,"").replace(/\s{2,}/g," ").replace(/[\s\-,/]+$/,"").trim();
+// One standard name per physical part, so XLRM, XLR3M, 3p-XLRM and "XLR 3 Male" all count together.
+function canonPart(c){
+  const raw = partName(c); if(!raw) return null;
+  const key = connKey(raw), [fp, g0] = key.split(":");
+  const fam = (fp.match(/^[a-z]+(?:21|25|45)?/)||[""])[0], pins = fp.slice(fam.length);
+  if(!FAM_LABEL[fam]) return {k:"x:"+norm(raw), name:raw, fam:"Other"};
+  const t = raw.toLowerCase(), G = g0 ? g0.toUpperCase() : "";
+  const ra = /\bra\b|right[\s-]?angle|-ra\b|\bra-|\(ra\)/.test(t), lp = /low[\s-]?pro|\blp\b/.test(t), lock = /lock/.test(t) && !/non[\s-]?lock/.test(t);
+  let name;
+  switch(fam){
+    case "xlr": name=`XLR${pins||3}${G}`; break;
+    case "ta": name=`TA${pins}${G}`; break;
+    case "hirose": name=`Hirose ${pins||4}${G}`; break;
+    case "lemo": name=`Lemo ${pins}${G}`.trim(); break;
+    case "bnc": name=`BNC${G?" "+G:""}${/75/.test(t)?" 75ohm":/50/.test(t)?" 50ohm":""}`; break;
+    case "sma": name=`SMA${G?" "+G:""}`; break;
+    case "mini": name=`1/8" ${/trrs/.test(t)?"TRRS":/\bts\b/.test(t)&&!/trs/.test(t)?"TS":"TRS"}${G?" "+G:""}`; break;
+    case "qtr": name=`1/4" ${/\bts\b/.test(t)&&!/trs/.test(t)?"TS":"TRS"}${G?" "+G:""}`; break;
+    case "ptap": name=`P-Tap${G?" "+G:""}`; break;
+    case "dtap": name=`D-Tap${G?" "+G:""}`; break;
+    case "dc21": name="2.1mm DC"; break;
+    case "dc25": name=/bds/.test(t)?"2.5mm DC (BDS)":"2.5mm DC"; break;
+    case "usbc": name="USB-C"; break;
+    case "usb": name="USB"; break;
+    case "rj45": name="RJ45"; break;
+    case "db25": name=`DB25${G?" "+G:""}`; break;
+    case "din": name="DIN 1.0/2.3"; break;
+    default: name=raw;
+  }
+  if(/\bemc\b/.test(t)) name+=" EMC";
+  if(/nickel/.test(t)) name+=" Nickel";
+  if(lp) name+=" Low Profile";
+  if(lock && !["xlr","ta","hirose","lemo","bnc"].includes(fam)) name+=" Locking";
+  if(ra) name+=" RA";
+  return {k:name.toLowerCase(), name, fam:FAM_LABEL[fam]};
+}
 function partsData(){
-  const today=todayISO(), lim = PARTS.due==="all" ? null : addDays(today, +PARTS.due);
-  const orders = queueItems().filter(r => PARTS.statuses.has(r.status) && (!lim || !r.need || r.need<=lim));
+  const orders = queueItems().filter(r => PARTS.statuses.has(r.status));
   const parts = new Map();
   for(const r of orders){
     const q = parseQty(r.qty);
     for(const c of [...(r.out||[]), ...(r.inp||[])]){
-      const nm = partName(c); if(!nm) continue;
-      const k = norm(nm); let p = parts.get(k);
-      if(!p){ const ck=connKey(nm).split(/\d|:/)[0]; p={k, names:new Map(), total:0, orders:new Map(), fam: FAM_LABEL[ck] || "Other", due:"", unsure:false}; parts.set(k,p); }
-      p.names.set(nm,(p.names.get(nm)||0)+1); p.total += q.n; p.unsure = p.unsure || q.unsure;
+      const cp = canonPart(c); if(!cp) continue;
+      let p = parts.get(cp.k);
+      if(!p){ p={k:cp.k, name:cp.name, fam:cp.fam, total:0, orders:new Map(), spellings:new Set(), due:"", unsure:false}; parts.set(cp.k,p); }
+      p.total += q.n; p.unsure = p.unsure || q.unsure; p.spellings.add(partName(c));
       p.orders.set(r.id, (p.orders.get(r.id)||0) + q.n);
       if(r.need && (!p.due || r.need<p.due)) p.due=r.need;
     }
   }
-  const list=[...parts.values()].map(p=>{ let best="",bn=0; for(const [n,c] of p.names) if(c>bn){best=n;bn=c;} p.name=best; return p; });
+  const list=[...parts.values()];
   const famOrder = Object.values(FAM_LABEL).concat("Other");
   list.sort((a,b)=> famOrder.indexOf(a.fam)-famOrder.indexOf(b.fam) || b.total-a.total || a.name.localeCompare(b.name));
   return {orders, list};
@@ -625,39 +660,35 @@ function renderParts(){
   const {orders, list} = partsData(), today=todayISO();
   const total = list.reduce((a,p)=>a+p.total,0);
   const fams = [...new Set(list.map(p=>p.fam))];
-  const chip = s => `<button class="stbtn" data-pstatus="${esc(s)}" aria-pressed="${PARTS.statuses.has(s)}">${esc(s)}</button>`;
-  const due = (v,l) => `<button class="stbtn" data-pdue="${v}" aria-pressed="${PARTS.due===v}">${l}</button>`;
   $("#main").innerHTML = `
-  <article class="sheet">
-    <div class="sheet-head">
-      <div class="ordno"><small>Parts needed</small><span class="mono">${total.toLocaleString()}</span> <span class="hint" style="font-size:14px;letter-spacing:0">connectors · ${list.length} kinds · ${orders.length} order${orders.length===1?"":"s"}</span></div>
-      <div class="actions"><button class="btn" id="parts-print" ${list.length?"":"disabled"}>Print</button><button class="btn ghost" id="parts-copy" ${list.length?"":"disabled"}>Copy list</button></div>
+  <div class="home">
+    <div class="home-head"><div><h2>Parts needed</h2><p class="hint">Connectors for the ${orders.length} submitted order${orders.length===1?"":"s"} waiting to be built. Each one is multiplied by the order quantity.</p></div>
+      <div class="actions"><button class="btn" id="parts-print" ${list.length?"":"disabled"}>Print pull sheet</button><button class="btn ghost" id="parts-copy" ${list.length?"":"disabled"}>Copy list</button></div></div>
+    <div class="tiles" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+      <div class="tile"><b class="mono">${total}</b><span>connectors total</span></div>
+      <div class="tile"><b class="mono">${list.length}</b><span>different parts</span></div>
+      <div class="tile"><b class="mono">${orders.length}</b><span>submitted orders</span></div>
     </div>
-    <div class="sec">
-      <div class="statusbar"><span class="hint" style="min-width:70px">Include</span>${["Submitted","In build","On hold","Ready"].map(chip).join("")}</div>
-      <div class="statusbar"><span class="hint" style="min-width:70px">Due</span>${due("all","Any time")}${due("0","Today")}${due("2","Next 3 days")}${due("6","Next 7 days")}</div>
-      <div class="hint">Each connector is multiplied by the order quantity. Channel labels like Left / Blue are counted as the same part.</div>
-    </div>
-    ${list.length ? fams.map(f=>{ const g=list.filter(p=>p.fam===f); return `<div class="sec">
-      <div class="sec-title" style="display:flex;justify-content:space-between"><span>${esc(f)}</span><span class="mono">${g.reduce((a,p)=>a+p.total,0)}</span></div>
-      <div class="ptable">${g.map(p=>`<div class="prow">
-        <span class="pq mono">${p.total}${p.unsure?'<span class="pw" title="One of these orders has an unclear quantity. Check it.">?</span>':""}</span>
-        <span class="pn mono">${esc(p.name)}</span>
-        <span class="po">${[...p.orders].map(([id,n])=>`<button class="linkish mono" data-open="${esc(id)}">#${esc(id)}</button>${n>1?`<span class="hint">×${n}</span>`:""}`).join(" ")}</span>
-        <span class="pd mono ${p.due&&p.due<today?"late":""}">${p.due?fmtDay(p.due):""}</span>
-      </div>`).join("")}</div></div>`; }).join("") : `<div class="sec"><div class="empty">No connectors needed for the orders selected. New orders show up here as soon as they're submitted.</div></div>`}
-  </article>`;
+    ${list.length ? fams.map(f=>{ const g=list.filter(p=>p.fam===f); return `<section>
+      <div class="sec-title fam-h"><span>${esc(f)}</span><span class="mono">${g.reduce((a,p)=>a+p.total,0)}</span></div>
+      <div class="pcards">${g.map(p=>`<div class="pcard">
+        <div class="pc-top"><b class="mono">${p.total}</b>${p.unsure?'<span class="pw" title="One of these orders has an unclear quantity (like 1 / 1). It was counted as the first number. Check the order.">?</span>':""}</div>
+        <div class="pc-name mono">${esc(p.name)}</div>
+        <div class="pc-meta">${p.orders.size} order${p.orders.size===1?"":"s"}${p.due?` · first due <span class="${p.due<today?"late":""}">${esc(fmtDay(p.due))}</span>`:""}</div>
+        <details class="pc-more"><summary>Orders</summary><div>${[...p.orders].map(([id,n])=>`<button class="linkish mono" data-open="${esc(id)}">#${esc(id)}</button> ×${n}`).join("<br>")}${p.spellings.size>1||![...p.spellings].includes(p.name)?`<div class="hint" style="margin-top:4px">Written as: ${esc([...p.spellings].join(", "))}</div>`:""}</div></details>
+      </div>`).join("")}</div></section>`; }).join("") : `<div class="sheet"><div class="sec"><div class="empty">No submitted orders right now, so no parts needed. Orders show up here as soon as a rep submits them, and drop off once they're marked In build.</div></div></div>`}
+  </div>`;
 }
 function partsText(){
   const {orders,list}=partsData();
-  return [`Connectors needed (${orders.length} open orders, ${new Date().toLocaleDateString()})`, ...list.map(p=>`${p.total}${p.unsure?"?":""} x ${p.name}   [${[...p.orders.keys()].map(i=>"#"+i).join(", ")}]`)].join("\n");
+  return [`Connectors needed (${orders.length} submitted orders, ${new Date().toLocaleDateString()})`, ...list.map(p=>`${p.total}${p.unsure?"?":""} x ${p.name}   [${[...p.orders.keys()].map(i=>"#"+i).join(", ")}]`)].join("\n");
 }
 function printParts(){
   const {orders,list}=partsData();
   let el = document.getElementById("print-sheet");
   if(!el){ el=document.createElement("div"); el.id="print-sheet"; document.body.appendChild(el); }
   const fams=[...new Set(list.map(p=>p.fam))];
-  el.innerHTML = `<div class="pp-h"><div><div class="p-logo" style="font-size:20pt">GOTHAM</div><div class="p-sub">SOUND &amp; COMMUNICATIONS, INC.</div></div><div style="text-align:right"><div class="p-title" style="margin:0">Connectors Needed</div><div class="pp-s">${orders.length} open orders · ${[...PARTS.statuses].join(", ")}${PARTS.due!=="all"?` · due within ${+PARTS.due+1} day(s)`:""}</div></div></div>
+  el.innerHTML = `<div class="pp-h"><div><div class="p-logo" style="font-size:20pt">GOTHAM</div><div class="p-sub">SOUND &amp; COMMUNICATIONS, INC.</div></div><div style="text-align:right"><div class="p-title" style="margin:0">Connectors Needed</div><div class="pp-s">${orders.length} submitted orders</div></div></div>
   <table class="pp-t"><thead><tr><th>Qty</th><th>Connector</th><th>Orders</th><th>Earliest due</th><th>Pulled</th></tr></thead><tbody>
   ${fams.map(f=>`<tr class="pp-f"><td colspan="5">${esc(f)}</td></tr>`+list.filter(p=>p.fam===f).map(p=>`<tr><td class="pp-q">${p.total}${p.unsure?"?":""}</td><td>${esc(p.name)}</td><td>${[...p.orders].map(([id,n])=>`#${esc(id)}${n>1?"×"+n:""}`).join(", ")}</td><td>${esc(fmtDate(p.due))}</td><td class="pp-box"></td></tr>`).join("")).join("")}
   </tbody></table>
@@ -706,8 +737,6 @@ document.addEventListener("click", e=>{
   const r = S.sel && BY_ID.get(S.sel);
   if(t.closest("#act-dup") && r){ startNew(r); return; }
   if(t.closest("#act-print") && r){ printOrder(r); return; }
-  const ps=t.closest("[data-pstatus]"); if(ps){ const v=ps.dataset.pstatus; PARTS.statuses.has(v)?PARTS.statuses.delete(v):PARTS.statuses.add(v); renderParts(); return; }
-  const pd=t.closest("[data-pdue]"); if(pd){ PARTS.due=pd.dataset.pdue; renderParts(); return; }
   if(t.closest("#parts-print")){ printParts(); return; }
   if(t.closest("#parts-copy")){ const txt=partsText(); (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>toast("Parts list copied"),()=>toast("Copy isn't available here")); return; }
   if(t.closest("#act-edit") && r){ startEdit(r); return; }

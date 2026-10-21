@@ -1,3 +1,4 @@
+
 (() => {
 "use strict";
 // ---------- constants ----------
@@ -142,7 +143,7 @@ function route(){
   const h = (location.hash||"").slice(1);
   if(h.startsWith("o-")){ S.sel = h.slice(2); S.mode="view"; if(S.tab==="new") S.tab="orders"; }
   else if(h==="new"){ startNew(); return; }
-  else if(h==="orders"||h==="queue"){ S.tab=h; }
+  else if(h==="orders"||h==="queue"||h==="parts"){ S.tab=h; if(h==="parts") S.sel=null; }
   renderAll();
 }
 window.addEventListener("hashchange", route);
@@ -164,7 +165,7 @@ function buildLine(r){
   return `<b>${esc(os)}</b> → <b>${esc(is)}</b>${r.len?` · ${esc(r.len)}`:""}${r.qty?` · ×${esc(r.qty)}`:""}`;
 }
 function rowHTML(r){
-  const meta = S.tab==="queue" ? `${esc(r.time||"")}` : esc(fmtDate(r.sub));
+  const meta = (S.tab==="queue"||S.tab==="parts") ? `${esc(r.time||"")}` : esc(fmtDate(r.sub));
   return `<button class="row" data-id="${esc(r.id)}" ${S.sel===r.id?'aria-current="true"':""}>
     <span class="cust">${esc(r.name||"(no name)")}</span>
     <span class="meta"><span class="mono">#${esc(r.id)}</span> · ${meta}${r.status&&OPEN.has(r.status)?` <span class="pill ${stClass(r.status)}">${esc(r.status)}</span>`:""}</span>
@@ -176,7 +177,7 @@ function renderRail(){
   const chips = $("#chips");
   chips.innerHTML = S.cust ? `<span class="chip">Customer: ${esc(CUSTS.find(c=>c.k===S.cust)?.name || S.cust)} <button id="clr-cust" aria-label="Clear customer filter">×</button></span>` : "";
   const list = $("#list");
-  if(S.tab==="queue" && !S.q && !S.cust){
+  if((S.tab==="queue"||S.tab==="parts") && !S.q && !S.cust){
     const items = queueItems(), today=todayISO(), tmr=addDays(today,1);
     $("#hint").textContent = items.length ? "Open orders, soonest due first." : "";
     if(!items.length){
@@ -549,6 +550,7 @@ function renderMain(){
   if(S.mode==="new"||S.mode==="edit"){ renderEdit(); return; }
   const r = S.sel && BY_ID.get(S.sel);
   if(r){ renderView(r); return; }
+  if(S.tab==="parts" && !S.sel){ renderParts(); return; }
   const open=queueItems().length, today=todayISO();
   const due=queueItems().filter(x=>x.need===today).length;
   const yr=String(new Date().getFullYear()); const thisYear=ALL.filter(x=>(x.sub||"").startsWith(yr)).length;
@@ -563,6 +565,76 @@ function renderAll(keepMain){
   renderRail();
   if(keepMain && (S.mode==="new"||S.mode==="edit")) return;
   renderMain();
+}
+
+// ---------- parts needed ----------
+const FAM_LABEL = {xlr:"XLR",ta:"TA (mini XLR)",hirose:"Hirose",lemo:"Lemo",bnc:"BNC",sma:"SMA",din:"DIN 1.0/2.3",ptap:"P-Tap",dtap:"D-Tap",usbc:"USB-C",usb:"USB",dc21:"2.1mm DC",dc25:"2.5mm DC / BDS",mini:"1/8\" (3.5mm)",qtr:"1/4\"",rj45:"RJ45",db25:"DB25"};
+const PARTS = { statuses: new Set(["Submitted","In build","On hold"]), due: "all" };
+function parseQty(q){ const s=String(q||"").trim(); const m=s.match(/\d+/); if(!m) return {n:1, unsure:true}; const extra=(s.match(/\d+/g)||[]).length>1 || /see|multiple|stock/i.test(s); return {n:+m[0], unsure:extra}; }
+// Channel labels like "Left / Blue" are markings, not different parts.
+const partName = c => String(c||"").replace(/\(?\s*\b(left|right|l|r)\s*\/\s*(blue|red)\s*\)?/ig,"").replace(/\(?\s*\b(blue|red)\s*\/\s*(left|right)\s*\)?/ig,"").replace(/\s{2,}/g," ").replace(/[\s\-,/]+$/,"").trim();
+function partsData(){
+  const today=todayISO(), lim = PARTS.due==="all" ? null : addDays(today, +PARTS.due);
+  const orders = queueItems().filter(r => PARTS.statuses.has(r.status) && (!lim || !r.need || r.need<=lim));
+  const parts = new Map();
+  for(const r of orders){
+    const q = parseQty(r.qty);
+    for(const c of [...(r.out||[]), ...(r.inp||[])]){
+      const nm = partName(c); if(!nm) continue;
+      const k = norm(nm); let p = parts.get(k);
+      if(!p){ const ck=connKey(nm).split(/\d|:/)[0]; p={k, names:new Map(), total:0, orders:new Map(), fam: FAM_LABEL[ck] || "Other", due:"", unsure:false}; parts.set(k,p); }
+      p.names.set(nm,(p.names.get(nm)||0)+1); p.total += q.n; p.unsure = p.unsure || q.unsure;
+      p.orders.set(r.id, (p.orders.get(r.id)||0) + q.n);
+      if(r.need && (!p.due || r.need<p.due)) p.due=r.need;
+    }
+  }
+  const list=[...parts.values()].map(p=>{ let best="",bn=0; for(const [n,c] of p.names) if(c>bn){best=n;bn=c;} p.name=best; return p; });
+  const famOrder = Object.values(FAM_LABEL).concat("Other");
+  list.sort((a,b)=> famOrder.indexOf(a.fam)-famOrder.indexOf(b.fam) || b.total-a.total || a.name.localeCompare(b.name));
+  return {orders, list};
+}
+function renderParts(){
+  const {orders, list} = partsData(), today=todayISO();
+  const total = list.reduce((a,p)=>a+p.total,0);
+  const fams = [...new Set(list.map(p=>p.fam))];
+  const chip = s => `<button class="stbtn" data-pstatus="${esc(s)}" aria-pressed="${PARTS.statuses.has(s)}">${esc(s)}</button>`;
+  const due = (v,l) => `<button class="stbtn" data-pdue="${v}" aria-pressed="${PARTS.due===v}">${l}</button>`;
+  $("#main").innerHTML = `
+  <article class="sheet">
+    <div class="sheet-head">
+      <div class="ordno"><small>Parts needed</small><span class="mono">${total.toLocaleString()}</span> <span class="hint" style="font-size:14px;letter-spacing:0">connectors · ${list.length} kinds · ${orders.length} order${orders.length===1?"":"s"}</span></div>
+      <div class="actions"><button class="btn" id="parts-print" ${list.length?"":"disabled"}>Print</button><button class="btn ghost" id="parts-copy" ${list.length?"":"disabled"}>Copy list</button></div>
+    </div>
+    <div class="sec">
+      <div class="statusbar"><span class="hint" style="min-width:70px">Include</span>${["Submitted","In build","On hold","Ready"].map(chip).join("")}</div>
+      <div class="statusbar"><span class="hint" style="min-width:70px">Due</span>${due("all","Any time")}${due("0","Today")}${due("2","Next 3 days")}${due("6","Next 7 days")}</div>
+      <div class="hint">Each connector is multiplied by the order quantity. Channel labels like Left / Blue are counted as the same part.</div>
+    </div>
+    ${list.length ? fams.map(f=>{ const g=list.filter(p=>p.fam===f); return `<div class="sec">
+      <div class="sec-title" style="display:flex;justify-content:space-between"><span>${esc(f)}</span><span class="mono">${g.reduce((a,p)=>a+p.total,0)}</span></div>
+      <div class="ptable">${g.map(p=>`<div class="prow">
+        <span class="pq mono">${p.total}${p.unsure?'<span class="pw" title="One of these orders has an unclear quantity. Check it.">?</span>':""}</span>
+        <span class="pn mono">${esc(p.name)}</span>
+        <span class="po">${[...p.orders].map(([id,n])=>`<button class="linkish mono" data-open="${esc(id)}">#${esc(id)}</button>${n>1?`<span class="hint">×${n}</span>`:""}`).join(" ")}</span>
+        <span class="pd mono ${p.due&&p.due<today?"late":""}">${p.due?fmtDay(p.due):""}</span>
+      </div>`).join("")}</div></div>`; }).join("") : `<div class="sec"><div class="empty">No connectors needed for the orders selected. New orders show up here as soon as they're submitted.</div></div>`}
+  </article>`;
+}
+function partsText(){
+  const {orders,list}=partsData();
+  return [`Connectors needed (${orders.length} open orders, ${new Date().toLocaleDateString()})`, ...list.map(p=>`${p.total}${p.unsure?"?":""} x ${p.name}   [${[...p.orders.keys()].map(i=>"#"+i).join(", ")}]`)].join("\n");
+}
+function printParts(){
+  const {orders,list}=partsData();
+  let el = document.getElementById("print-sheet");
+  if(!el){ el=document.createElement("div"); el.id="print-sheet"; document.body.appendChild(el); }
+  const fams=[...new Set(list.map(p=>p.fam))];
+  el.innerHTML = `<div class="pp-h"><div><div class="p-logo" style="font-size:20pt">GOTHAM</div><div class="p-sub">SOUND &amp; COMMUNICATIONS, INC.</div></div><div style="text-align:right"><div class="p-title" style="margin:0">Connectors Needed</div><div class="pp-s">${orders.length} open orders · ${[...PARTS.statuses].join(", ")}${PARTS.due!=="all"?` · due within ${+PARTS.due+1} day(s)`:""}</div></div></div>
+  <table class="pp-t"><thead><tr><th>Qty</th><th>Connector</th><th>Orders</th><th>Earliest due</th><th>Pulled</th></tr></thead><tbody>
+  ${fams.map(f=>`<tr class="pp-f"><td colspan="5">${esc(f)}</td></tr>`+list.filter(p=>p.fam===f).map(p=>`<tr><td class="pp-q">${p.total}${p.unsure?"?":""}</td><td>${esc(p.name)}</td><td>${[...p.orders].map(([id,n])=>`#${esc(id)}${n>1?"×"+n:""}`).join(", ")}</td><td>${esc(fmtDate(p.due))}</td><td class="pp-box"></td></tr>`).join("")).join("")}
+  </tbody></table>
+  <div class="p-printed">Printed ${esc(new Date().toLocaleString())}${me?` by ${esc(me.name)}`:""}</div>`;
+  window.print();
 }
 
 // ---------- print ----------
@@ -596,7 +668,7 @@ function printOrder(r){
 // ---------- events ----------
 document.addEventListener("click", e=>{
   const t=e.target;
-  const tab=t.closest(".tab"); if(tab){ S.tab=tab.dataset.tab; S.shown=150; if(S.mode!=="view"){ S.mode="view"; S.draft=null; } go(S.tab); return; }
+  const tab=t.closest(".tab"); if(tab){ S.tab=tab.dataset.tab; if(S.tab==="parts") S.sel=null; S.shown=150; if(S.mode!=="view"){ S.mode="view"; S.draft=null; } go(S.tab); return; }
   if(t.closest("#btn-new")||t.closest("#btn-new2")){ startNew(); return; }
   const row=t.closest(".row"); if(row){ S.mode="view"; S.draft=null; go("o-"+row.dataset.id); window.scrollTo(0,0); return; }
   if(t.closest("#more")){ S.shown+=200; renderRail(); return; }
@@ -604,6 +676,10 @@ document.addEventListener("click", e=>{
   const r = S.sel && BY_ID.get(S.sel);
   if(t.closest("#act-dup") && r){ startNew(r); return; }
   if(t.closest("#act-print") && r){ printOrder(r); return; }
+  const ps=t.closest("[data-pstatus]"); if(ps){ const v=ps.dataset.pstatus; PARTS.statuses.has(v)?PARTS.statuses.delete(v):PARTS.statuses.add(v); renderParts(); return; }
+  const pd=t.closest("[data-pdue]"); if(pd){ PARTS.due=pd.dataset.pdue; renderParts(); return; }
+  if(t.closest("#parts-print")){ printParts(); return; }
+  if(t.closest("#parts-copy")){ const txt=partsText(); (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>toast("Parts list copied"),()=>toast("Copy isn't available here")); return; }
   if(t.closest("#act-edit") && r){ startEdit(r); return; }
   if(t.closest("#act-copy") && r){ const txt=summary(r); (navigator.clipboard?navigator.clipboard.writeText(txt):Promise.reject()).then(()=>toast("Summary copied"),()=>toast("Copy isn't available here")); return; }
   if(t.closest("#cust-link") && r){ S.cust=custKey(r.name); S.q=""; $("#q").value=""; S.tab="orders"; S.shown=150; renderRail(); document.querySelectorAll(".tab").forEach(x=>x.setAttribute("aria-selected",String(x.dataset.tab==="orders"))); return; }

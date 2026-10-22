@@ -2,11 +2,13 @@
 (() => {
 "use strict";
 // ---------- constants ----------
-const STATUSES = ["Submitted","In build","Ready","Picked up","On hold","Cancelled"];
-const OPEN = new Set(["Submitted","In build","Ready","On hold"]);
+const STATUSES = ["Submitted","Waiting on parts","In build","Ready","On hold","Cancelled"];
+// Ready is the last step: the cable is built and leaves the open queue.
+const OPEN = new Set(["Submitted","Waiting on parts","In build","On hold"]);
+const KNOWN_STATUS = new Set([...STATUSES, "Picked up"]);
 const stClass = s => "s-" + (s||"archived").toLowerCase().replace(/[^a-z]/g,"");
 const FIELDS = ["id","sub","need","time","name","mas","phone","email","pay","qty","len","color","outDev","inDev","out","inp","notes","rep","status","quote","appr","apprDate"];
-const LABELS = {sub:"Date submitted",need:"Date needed",time:"Time needed",name:"Customer",mas:"MAS ID",phone:"Phone",email:"Email",pay:"Payment / SO#",qty:"Quantity",len:"Length",color:"Cable color",outDev:"Output device",inDev:"Input device",out:"Output connectors",inp:"Input connectors",notes:"Notes",rep:"Sales rep",status:"Status",quote:"Quote",appr:"Approved by",apprDate:"Approved date"};
+const LABELS = {sub:"Date submitted",need:"Date needed",time:"Time needed",name:"Customer",mas:"CUST-ID",phone:"Phone",email:"Email",pay:"Payment / SO#",qty:"Quantity",len:"Length",color:"Cable color",outDev:"Output device",inDev:"Input device",out:"Output connectors",inp:"Input connectors",notes:"Notes",rep:"Sales rep",status:"Status",quote:"Quote",appr:"Approved by",apprDate:"Approved date"};
 
 // Standard connector names in the house style. Shown first in every connector dropdown.
 const STD_CONN = {
@@ -61,7 +63,7 @@ const S = { tab:"home", sel:null, mode:"view", draft:null, q:"", cust:null, show
 // FormDocs orders have no status. Treat one as open (Submitted) when it was entered recently
 // and its date needed is today or later; older ones count as done.
 function autoOpen(r, today, minSub, maxNeed){
-  if(STATUSES.includes(r.status)) return;
+  if(KNOWN_STATUS.has(r.status)) return;
   if(r.need && r.need>=today && r.need<=maxNeed && (r.sub||"")>=minSub){ r._legacyStatus = r._legacyStatus ?? (r.status||""); r.status="Submitted"; r._auto=true; }
 }
 function rebuild(){
@@ -227,7 +229,7 @@ async function renderView(r){
     <div class="sec grid2">
       <div class="fields">
         ${fv("Name", r.name ? `<button class="linkish" id="cust-link" title="Show every order for this customer">${esc(r.name)}</button>${others&&others.n>1?`<span class="hint">${others.n} orders</span>`:""}` : "")}
-        ${fv("MAS ID", esc(r.mas), "mono")}
+        ${fv("CUST-ID", esc(r.mas), "mono")}
         ${fv("Phone", esc(r.phone), "mono")}
         ${fv("Email", esc(r.email))}
         ${fv("Payment", esc(r.pay), "mono")}
@@ -322,7 +324,7 @@ function renderEdit(){
     <div class="sec grid2">
       <div class="fields">
         ${fi("name","Name",{req:true,combo:"cust",ph:"Customer or company"})}
-        ${fi("mas","MAS ID",{mono:true})}
+        ${fi("mas","CUST-ID",{mono:true,ph:"CUST-"})}
         ${fi("phone","Phone",{mono:true})}
         ${fi("email","Email",{type:"email"})}
         ${fi("pay","Payment",{mono:true,ph:"SO# GS26-…"})}
@@ -566,7 +568,7 @@ function renderMain(){
 function renderHome(){
   const q=queueItems(), today=todayISO(), tmr=addDays(today,1);
   const overdue=q.filter(r=>r.need&&r.need<today), dueToday=q.filter(r=>r.need===today), dueTmr=q.filter(r=>r.need===tmr);
-  const ready=q.filter(r=>r.status==="Ready"), toBuild=q.filter(r=>r.status==="Submitted"||r.status==="In build");
+  const waiting=q.filter(r=>r.status==="Waiting on parts"), toBuild=q.filter(r=>r.status==="Submitted"||r.status==="In build");
   const yr=String(new Date().getFullYear()); const thisYear=ALL.filter(x=>(x.sub||"").startsWith(yr)).length;
   const parts=partsData().list.reduce((a,p)=>a+p.total,0);
   const tile=(n,l,go,cls="")=>`<button class="tile ${cls}" data-go="${go}"><b class="mono">${n}</b><span>${l}</span></button>`;
@@ -579,7 +581,7 @@ function renderHome(){
       ${tile(overdue.length,"overdue","queue",overdue.length?"bad":"")}
       ${tile(dueToday.length,"due today","queue",dueToday.length?"warn":"")}
       ${tile(toBuild.length,"to build","queue")}
-      ${tile(ready.length,"ready for pickup","queue",ready.length?"ok":"")}
+      ${tile(waiting.length,"waiting on parts","queue",waiting.length?"warn":"")}
       ${tile(parts,"connectors needed","parts")}
     </div>
     <div class="grid2 home-lists">
@@ -597,7 +599,7 @@ function renderAll(keepMain){
 
 // ---------- parts needed ----------
 const FAM_LABEL = {xlr:"XLR",ta:"TA (mini XLR)",hirose:"Hirose",lemo:"Lemo",bnc:"BNC",sma:"SMA",din:"DIN 1.0/2.3",ptap:"P-Tap",dtap:"D-Tap",usbc:"USB-C",usb:"USB",dc21:"2.1mm DC",dc25:"2.5mm DC / BDS",mini:"1/8\" (3.5mm)",qtr:"1/4\"",rj45:"RJ45",db25:"DB25"};
-const PARTS = { statuses: new Set(["Submitted"]) };
+const PARTS = { statuses: new Set(["Submitted","Waiting on parts"]) };
 function parseQty(q){ const s=String(q||"").trim(); const m=s.match(/\d+/); if(!m) return {n:1, unsure:true}; const extra=(s.match(/\d+/g)||[]).length>1 || /see|multiple|stock/i.test(s); return {n:+m[0], unsure:extra}; }
 // Channel labels like "Left / Blue" are markings, not different parts.
 const partName = c => String(c||"").replace(/\(?\s*\b(left|right|l|r)\s*\/\s*(blue|red)\s*\)?/ig,"").replace(/\(?\s*\b(blue|red)\s*\/\s*(left|right)\s*\)?/ig,"").replace(/\s{2,}/g," ").replace(/[\s\-,/]+$/,"").trim();
@@ -662,12 +664,12 @@ function renderParts(){
   const fams = [...new Set(list.map(p=>p.fam))];
   $("#main").innerHTML = `
   <div class="home">
-    <div class="home-head"><div><h2>Parts needed</h2><p class="hint">Connectors for the ${orders.length} submitted order${orders.length===1?"":"s"} waiting to be built. Each one is multiplied by the order quantity.</p></div>
+    <div class="home-head"><div><h2>Parts needed</h2><p class="hint">Connectors for the ${orders.length} order${orders.length===1?"":"s"} that are submitted or waiting on parts. Each one is multiplied by the order quantity.</p></div>
       <div class="actions"><button class="btn" id="parts-print" ${list.length?"":"disabled"}>Print pull sheet</button><button class="btn ghost" id="parts-copy" ${list.length?"":"disabled"}>Copy list</button></div></div>
     <div class="tiles" style="grid-template-columns:repeat(3,minmax(0,1fr))">
       <div class="tile"><b class="mono">${total}</b><span>connectors total</span></div>
       <div class="tile"><b class="mono">${list.length}</b><span>different parts</span></div>
-      <div class="tile"><b class="mono">${orders.length}</b><span>submitted orders</span></div>
+      <div class="tile"><b class="mono">${orders.length}</b><span>orders</span></div>
     </div>
     ${list.length ? fams.map(f=>{ const g=list.filter(p=>p.fam===f); return `<section>
       <div class="sec-title fam-h"><span>${esc(f)}</span><span class="mono">${g.reduce((a,p)=>a+p.total,0)}</span></div>
@@ -706,7 +708,7 @@ function printOrder(r){
   const conns = arr => { let h=""; for(let i=0;i<8;i++) h+=`<div class="p-conn"><span class="p-n">${i+1}</span><span class="p-v">${esc((arr||[])[i]||"")}</span></div>`; return h; };
   el.innerHTML = `
   <div class="p-head">
-    <div class="p-col">${box("MAS ID",r.mas)}${box("Name",r.name)}${box("Phone",r.phone)}${box("Email",r.email)}${box("Payment",r.pay)}</div>
+    <div class="p-col">${box("CUST-ID",r.mas)}${box("Name",r.name)}${box("Phone",r.phone)}${box("Email",r.email)}${box("Payment",r.pay)}</div>
     <div class="p-mid"><div class="p-logo">GOTHAM</div><div class="p-sub">SOUND &amp; COMMUNICATIONS, INC.</div><div class="p-title">Custom Cable</div></div>
     <div class="p-col"><div class="p-order">Order <b>${esc(r.id)}</b></div>${box("Date Submitted",fmtDate(r.sub))}${box("Date Needed",fmtDate(r.need))}${box("Time Needed",r.time)}${box("Status",r.status)}${box("Sales Rep",r.rep)}</div>
   </div>

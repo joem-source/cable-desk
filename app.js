@@ -2,14 +2,13 @@
 (() => {
 "use strict";
 // ---------- constants ----------
-// Submitted = a request that hasn't been accepted yet. Accepted onward = real work for the bench.
-const STATUSES = ["Submitted","Accepted","Waiting on parts","In build","Ready","On hold","Cancelled"];
-// Ready is the last step: the cable is built and leaves the open queue.
-const OPEN = new Set(["Submitted","Accepted","Waiting on parts","In build","On hold"]);
-const WORK = new Set(["Accepted","Waiting on parts","In build","On hold"]);
+const STATUSES = ["Submitted","Waiting on parts","In build","Ready","On hold","Cancelled"];
+// Every submitted order is in the queue. Ready is the last step: the cable is built and leaves the queue.
+const OPEN = new Set(["Submitted","Waiting on parts","In build","On hold"]);
+const WORK = OPEN;
 const KNOWN_STATUS = new Set([...STATUSES, "Picked up"]);
 const stClass = s => "s-" + (s||"archived").toLowerCase().replace(/[^a-z]/g,"");
-const stLabel = s => s==="Submitted" ? "New request" : (s||"Archived");
+const stLabel = s => s||"Archived";
 const FIELDS = ["id","sub","need","flex","time","name","company","mas","phone","email","pay","qty","len","color","outDev","inDev","out","inp","notes","rep","status","quote","appr","apprDate"];
 const LABELS = {sub:"Date submitted",need:"Date needed",flex:"No hard deadline",time:"Time needed",name:"Contact",company:"Company / show",mas:"CUST-ID",phone:"Phone",email:"Email",pay:"Payment / SO#",qty:"Quantity",len:"Length",color:"Cable color",outDev:"Output device",inDev:"Input device",out:"Output connectors",inp:"Input connectors",notes:"Notes",rep:"Sales rep",status:"Status",quote:"Quote",appr:"Approved by",apprDate:"Approved date"};
 
@@ -70,14 +69,14 @@ const LIVE = new Map();           // id -> live doc (new orders + amended histor
 let ALL = [], BY_ID = new Map();
 let fs = null, me = null, canWrite = false, dbReady = false;
 const S = { tab:"home", sel:null, mode:"view", draft:null, q:"", cust:null, shown:100, errors:{}, asOf:null, day:null };
-const PARTS = { requests:false, range:"all", sort:"type" };
+const PARTS = { range:"all", sort:"type" };
 const viewDay = () => S.asOf || todayISO();
 
-// FormDocs orders have no status. Treat one as an accepted, open order when it was entered recently
+// FormDocs orders have no status. Treat one as an open order when it was entered recently
 // and its date needed is today or later; older ones count as done.
 function autoOpen(r, today, minSub, maxNeed){
   if(KNOWN_STATUS.has(r.status)) return;
-  if(r.need && r.need>=today && r.need<=maxNeed && (r.sub||"")>=minSub){ r._legacyStatus = r._legacyStatus ?? (r.status||""); r.status="Accepted"; r._auto=true; }
+  if(r.need && r.need>=today && r.need<=maxNeed && (r.sub||"")>=minSub){ r._legacyStatus = r._legacyStatus ?? (r.status||""); r.status="Submitted"; r._auto=true; }
 }
 function rebuild(){
   BY_ID = new Map(HIST_BY);
@@ -158,7 +157,7 @@ async function start(){
     $("#main").innerHTML = `<div class="empty">Couldn't load orders${e&&e.code==="permission-denied"?": this account doesn't have access":""}. Reload to try again.</div>`;
   }
 }
-function liveRec(id, data){ const o = Object.assign({}, data); o.id = id; o.out=o.out||[]; o.inp=o.inp||[]; return o; }
+function liveRec(id, data){ const o = Object.assign({}, data); o.id = id; o.out=o.out||[]; o.inp=o.inp||[]; if(o.status==="Accepted") o.status="Submitted"; return o; }
 
 // ---------- routing ----------
 const TABS = ["home","queue","parts","orders"];
@@ -177,7 +176,7 @@ function go(hash){ if(location.hash !== "#"+hash) location.hash = hash; else rou
 const byDue = (a,b)=>(a.need||"9").localeCompare(b.need||"9") || (a.time||"").localeCompare(b.time||"") || a.id.localeCompare(b.id);
 const openItems = () => ALL.filter(r => OPEN.has(r.status)).sort(byDue);
 const workItems = () => ALL.filter(r => WORK.has(r.status)).sort(byDue);
-const requestItems = () => ALL.filter(r => r.status==="Submitted").sort(byDue);
+
 
 // Search: plain words must all appear; "quoted phrases" must appear exactly, as whole words.
 function parseQuery(q){
@@ -213,7 +212,7 @@ function qrow(r, opts={}){
     <span class="q-who"><b>${esc(r.name||"(no name)")}</b>${r.company?`<span>${esc(r.company)}</span>`:""}</span>
     <span class="q-build mono"><span>${buildLine(r)}</span><span>${esc([r.len, r.qty?"×"+r.qty:""].filter(Boolean).join(" · "))}</span></span>
     <span class="q-dev">${devLine(r)}</span>
-    <span class="q-st">${flexBadge(r)}${opts.accept&&canWrite?`<button class="btn sm primary" data-accept="${esc(r.id)}">Accept</button>`:statusSelect(r)}</span>
+    <span class="q-st">${flexBadge(r)}${statusSelect(r)}</span>
   </div>`;
 }
 
@@ -232,21 +231,20 @@ function asOfBanner(){
 // ---------- dashboard ----------
 function renderHome(){
   const day=viewDay(), nxt=addDays(day,1);
-  const work=workItems(), reqs=requestItems();
+  const work=workItems();
   const overdue=work.filter(r=>r.need&&r.need<day), dueDay=work.filter(r=>r.need===day), dueNext=work.filter(r=>r.need===nxt);
-  const waiting=work.filter(r=>r.status==="Waiting on parts"), toBuild=work.filter(r=>r.status==="Accepted"||r.status==="In build");
+  const waiting=work.filter(r=>r.status==="Waiting on parts"), toBuild=work.filter(r=>r.status==="Submitted"||r.status==="In build");
   const parts=partsData().list.reduce((a,p)=>a+p.total,0);
   const isToday = day===todayISO();
   const tile=(n,l,goTo,cls="")=>`<button class="tile ${cls}" data-go="${goTo}"><b class="mono">${n}</b><span>${l}</span></button>`;
   // 2-week calendar from the view day
   const cells=[];
   for(let i=0;i<14;i++){
-    const d=addDays(day,i), w=work.filter(r=>r.need===d), q=reqs.filter(r=>r.need===d), fl=w.filter(r=>r.flex).length, wk=dow(d)===0||dow(d)===6;
+    const d=addDays(day,i), w=work.filter(r=>r.need===d), fl=w.filter(r=>r.flex).length, wk=dow(d)===0||dow(d)===6;
     cells.push(`<button class="cal-d ${wk?"wkend":""} ${i===0?"first":""} ${w.length?"":"zero"}" data-day="${d}" title="${esc(fmtLong(d))}">
       <span class="cal-h"><span>${new Date(d+"T12:00:00").toLocaleDateString(undefined,{weekday:"short"})}</span><span class="mono">${new Date(d+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"})}</span></span>
       <b class="mono">${w.length}</b>
       <span class="cal-s">${w.length?`order${w.length===1?"":"s"}`:"&nbsp;"}${fl?` · ${fl} flexible`:""}</span>
-      ${q.length?`<span class="cal-r">+${q.length} request${q.length===1?"":"s"}</span>`:""}
     </button>`);
   }
   const list = (rows, empty) => rows.length ? rows.map(r=>qrow(r,{date:r.need&&r.need<day})).join("") : `<div class="hint pad">${empty}</div>`;
@@ -257,7 +255,6 @@ function renderHome(){
       ${aheadHTML()}
     </div>
     <div class="tiles">
-      ${tile(reqs.length,"new requests to review","queue",reqs.length?"accent":"")}
       ${tile(overdue.length,"overdue","queue",overdue.length?"bad":"")}
       ${tile(dueDay.length,isToday?"due today":"due "+fmtDay(day),"queue",dueDay.length?"warn":"")}
       ${tile(toBuild.length,"to build","queue")}
@@ -265,21 +262,20 @@ function renderHome(){
       ${tile(parts,"connectors needed","parts")}
     </div>
     <section class="panel">
-      <div class="panel-h"><h2>Next two weeks</h2><span class="hint">Accepted orders by date needed. Click a day to see its orders.</span></div>
+      <div class="panel-h"><h2>Next two weeks</h2><span class="hint">Open orders by date needed. Click a day to see its orders.</span></div>
       <div class="cal">${cells.join("")}</div>
     </section>
     <div class="cols2">
       <section class="panel"><div class="panel-h"><h2>${overdue.length?"Overdue and due ":"Due "}${isToday?"today":esc(fmtDay(day))}</h2><span class="mono hint">${overdue.length+dueDay.length}</span></div>${list([...overdue,...dueDay],"Nothing due.")}</section>
       <section class="panel"><div class="panel-h"><h2>Due ${isToday?"tomorrow":esc(fmtDay(nxt))}</h2><span class="mono hint">${dueNext.length}</span></div>${list(dueNext,"Nothing due.")}</section>
     </div>
-    ${reqs.length?`<section class="panel"><div class="panel-h"><h2>New requests to review</h2><span class="hint">Submitted but not accepted yet. Accept one to put it on the bench.</span></div>${reqs.map(r=>qrow(r,{date:true,accept:true})).join("")}</section>`:""}
     <p class="hint center">${ALL.length.toLocaleString()} orders on file. Search any past cable from the box at the top.</p>
   </div>`;
 }
 
 // ---------- open queue ----------
 function renderQueue(){
-  const day=viewDay(), work=workItems(), reqs=requestItems();
+  const day=viewDay(), work=workItems();
   let rows = S.day ? work.filter(r=>r.need===S.day) : work;
   const groups = new Map();
   for(const r of rows){
@@ -291,13 +287,12 @@ function renderQueue(){
   $("#main").innerHTML = `
   <div class="page">
     <div class="page-head">
-      <div><h1>Open queue</h1><p class="hint">${work.length} accepted order${work.length===1?"":"s"} on the bench, soonest due first. Change a status right from the list.</p></div>
+      <div><h1>Open queue</h1><p class="hint">${work.length} open order${work.length===1?"":"s"}, soonest due first. Change a status right from the list.</p></div>
       ${aheadHTML()}
     </div>
     ${S.day?`<div class="chips"><span class="chip">Showing ${esc(fmtLong(S.day))} only <button data-clearday aria-label="Show all days">×</button></span></div>`:""}
-    ${reqs.length && !S.day ? `<section class="panel req"><div class="panel-h"><h2>New requests</h2><span class="hint">${reqs.length} waiting to be accepted</span></div>${reqs.map(r=>qrow(r,{date:true,accept:true})).join("")}</section>`:""}
     <section class="panel">
-      ${rows.length ? keys.map(k=>`<div class="grp ${k==="overdue"?"overdue":""}"><span>${esc(label(k))}</span><span class="mono">${groups.get(k).length}</span></div>${groups.get(k).map(r=>qrow(r,{date:k==="overdue"||k==="none"})).join("")}`).join("") : `<div class="empty">${S.day?"No accepted orders due that day.":"No accepted orders right now."}</div>`}
+      ${rows.length ? keys.map(k=>`<div class="grp ${k==="overdue"?"overdue":""}"><span>${esc(label(k))}</span><span class="mono">${groups.get(k).length}</span></div>${groups.get(k).map(r=>qrow(r,{date:k==="overdue"||k==="none"})).join("")}`).join("") : `<div class="empty">${S.day?"No open orders due that day.":"No open orders right now."}</div>`}
     </section>
   </div>`;
 }
@@ -465,7 +460,6 @@ function renderEdit(){
         ${fi("time","Time needed",{combo:"time",mono:true})}
         ${fi("rep","Sales rep",{combo:"rep",req:true,ph:"Your initials"})}
         ${fi("quote","Quote",{mono:true,ph:"$"})}
-        ${isNew?`<label class="check"><input type="checkbox" id="d-accept" ${d.status==="Accepted"?"checked":""}> Customer confirmed. Mark as accepted now.</label>`:""}
       </div>
     </div>
     <div class="sec grid3">
@@ -636,7 +630,6 @@ async function save(){
   if(saving) return;
   const d=S.draft;
   const fl=$("#d-flex"); if(fl) d.flex=fl.checked;
-  const ac=$("#d-accept"); if(ac) d.status = ac.checked ? "Accepted" : "Submitted";
   S.errors=validate(d);
   if(Object.keys(S.errors).length){ renderEdit(); window.scrollTo(0,0); return; }
   if(!fs || !canWrite){ toast("Saving isn't available right now."); return; }
@@ -655,7 +648,7 @@ async function doSave(note){
       await fs.collection("orders").doc(id).set(body);
       LIVE.set(id, liveRec(id, body));
       rebuild(); S.mode="view"; S.sel=id; S.draft=null; history.replaceState(null,"","#o-"+id);
-      toast(`Order #${id} ${body.status==="Accepted"?"accepted and sent to the bench":"submitted for review"}`); renderAll();
+      toast(`Order #${id} submitted to the queue`); renderAll();
       if(S.printAfter) setTimeout(()=>printOrder(BY_ID.get(id)), 300);
     } else {
       const cur = BY_ID.get(d.id); const next = cleanDraft(d);
@@ -704,7 +697,6 @@ function renderAll(keepMain){
   const tabSel = S.sel||S.mode!=="view" ? null : S.tab;
   document.querySelectorAll(".tab").forEach(t => t.setAttribute("aria-selected", String(t.dataset.tab===tabSel)));
   $("#ct-queue").textContent = dbReady ? (workItems().length || "") : "";
-  const rq = dbReady ? requestItems().length : 0; const b=$("#ct-req"); if(b){ b.textContent = rq || ""; b.hidden = !rq; }
   $("#ct-orders").textContent = dbReady ? ALL.length.toLocaleString() : "";
   asOfBanner();
   if(!dbReady) return;
@@ -770,7 +762,7 @@ function rangeEnd(){
 }
 const RANGES = [["all","Any time"],["day","Through today"],["week","This week"],["d7","Next 7 days"],["month","This month"],["d30","Next 30 days"]];
 function partsData(){
-  const statuses = new Set(["Accepted","Waiting on parts"]); if(PARTS.requests) statuses.add("Submitted");
+  const statuses = new Set(["Submitted","Waiting on parts"]);
   const end = rangeEnd();
   const orders = openItems().filter(r => statuses.has(r.status) && (!end || !r.need || r.need<=end));
   const parts = new Map();
@@ -795,7 +787,7 @@ function partsData(){
   return {orders, list, groups, end};
 }
 function partsDesc(orders,end){
-  return `${orders.length} order${orders.length===1?"":"s"} · accepted and waiting on parts${PARTS.requests?" plus new requests":""} · ${end?`due by ${fmtDay(end)}`:"any due date"}`;
+  return `${orders.length} order${orders.length===1?"":"s"} · submitted and waiting on parts · ${end?`due by ${fmtDay(end)}`:"any due date"}`;
 }
 function renderParts(){
   const {orders, list, groups, end} = partsData(), day=viewDay();
@@ -804,13 +796,12 @@ function renderParts(){
   $("#main").innerHTML = `
   <div class="page">
     <div class="page-head">
-      <div><h1>Parts needed</h1><p class="hint">Connectors for orders that are accepted or waiting on parts. Each one is multiplied by the order quantity. Orders drop off once they're marked In build.</p></div>
+      <div><h1>Parts needed</h1><p class="hint">Connectors for orders that are submitted or waiting on parts. Each one is multiplied by the order quantity. Orders drop off once they're marked In build.</p></div>
       <div class="actions"><button class="btn" id="parts-print" ${list.length?"":"disabled"}>Print pull sheet</button><button class="btn ghost" id="parts-copy" ${list.length?"":"disabled"}>Copy list</button></div>
     </div>
     <section class="panel opts">
       <div class="statusbar"><span class="hint optl">Due</span>${RANGES.map(([v,l])=>opt("prange",v,v==="day"?(day===todayISO()?"Through today":"Through "+fmtDay(day)):l,PARTS.range)).join("")}</div>
       <div class="statusbar"><span class="hint optl">Group by</span>${opt("psort","type","Connector type",PARTS.sort)}${opt("psort","due","Earliest due date",PARTS.sort)}</div>
-      <div class="statusbar"><span class="hint optl">Include</span><label class="check inline"><input type="checkbox" id="p-req" ${PARTS.requests?"checked":""}> New requests that aren't accepted yet</label></div>
       ${aheadHTML()}
     </section>
     <div class="tiles three">
@@ -825,7 +816,7 @@ function renderParts(){
         <div class="pc-name mono">${esc(p.name)}</div>
         <div class="pc-meta">${PARTS.sort==="due"?esc(p.fam)+" · ":""}${p.orders.size} order${p.orders.size===1?"":"s"}${p.due&&PARTS.sort!=="due"?` · first due <span class="${p.due<day?"late":""}">${esc(fmtDay(p.due))}</span>`:""}</div>
         <details class="pc-more"><summary>Orders</summary><div>${[...p.orders].map(([id,n])=>`<button class="linkish mono" data-open="${esc(id)}">#${esc(id)}</button> ×${n}${BY_ID.get(id)?.need?` <span class="hint">${esc(fmtDay(BY_ID.get(id).need))}</span>`:""}`).join("<br>")}${p.spellings.size>1||![...p.spellings].includes(p.name)?`<div class="hint" style="margin-top:4px">Written as: ${esc([...p.spellings].join(", "))}</div>`:""}</div></details>
-      </div>`).join("")}</div></section>`).join("") : `<section class="panel"><div class="empty">No parts needed for orders ${end?`due by ${esc(fmtDay(end))}`:"right now"}. Orders show up here once they're accepted.</div></section>`}
+      </div>`).join("")}</div></section>`).join("") : `<section class="panel"><div class="empty">No parts needed for orders ${end?`due by ${esc(fmtDay(end))}`:"right now"}. Orders show up here as soon as they're submitted.</div></section>`}
   </div>`;
 }
 function partsText(){
@@ -890,14 +881,13 @@ function printOrder(r){
 // ---------- events ----------
 document.addEventListener("click", e=>{
   const t=e.target;
-  if(t.closest("select") || t.closest("#p-req") || t.closest("label.check")) return;
+  if(t.closest("select") || t.closest("label.check")) return;
   if(t.closest("#brand")){ S.q=""; S.cust=null; const qi=$("#q"); if(qi) qi.value=""; S.day=null; go("home"); return; }
   const dl=t.closest("[data-go]"); if(dl){ S.day=null; go(dl.dataset.go); return; }
   const tab=t.closest(".tab"); if(tab){ S.shown=100; S.day=null; go(tab.dataset.tab); return; }
   const as=t.closest("[data-asof]"); if(as){ const v=as.dataset.asof; S.asOf = (!v||v===todayISO()) ? null : v; renderAll(); return; }
   const dd=t.closest("[data-day]"); if(dd){ S.day=dd.dataset.day; go("queue"); return; }
   if(t.closest("[data-clearday]")){ S.day=null; renderAll(); return; }
-  const acc=t.closest("[data-accept]"); if(acc){ const r=BY_ID.get(acc.dataset.accept); if(r) setStatus(r,"Accepted"); return; }
   if(t.closest("#btn-new")){ startNew(); return; }
   const row=t.closest(".qrow, .orow:not(.ohead)"); if(row){ go("o-"+row.dataset.id); window.scrollTo(0,0); return; }
   if(t.closest("#more")){ S.shown+=200; renderOrders(); return; }
@@ -926,9 +916,7 @@ document.addEventListener("change", e=>{
   const t=e.target;
   if(t.classList.contains("st-sel")){ const r=BY_ID.get(t.dataset.id); if(r) setStatus(r, t.value); return; }
   if(t.id==="asof-date"){ S.asOf = (!t.value||t.value===todayISO()) ? null : t.value; renderAll(); return; }
-  if(t.id==="p-req"){ PARTS.requests=t.checked; renderParts(); return; }
   if(t.id==="d-flex" && S.draft){ S.draft.flex=t.checked; return; }
-  if(t.id==="d-accept" && S.draft){ S.draft.status=t.checked?"Accepted":"Submitted"; return; }
 });
 document.addEventListener("input", e=>{
   const t=e.target;
